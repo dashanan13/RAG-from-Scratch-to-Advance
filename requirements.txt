@@ -6,3 +6,4 @@ azure-identity>=1.26,<2
 openinference-instrumentation-openai>=0.1.65,<1
 opentelemetry-sdk>=1.45,<2
 opentelemetry-exporter-otlp-proto-http>=1.45,<2
+nbstripout>=0.7,<1
