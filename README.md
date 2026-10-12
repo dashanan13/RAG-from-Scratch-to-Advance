@@ -45,7 +45,7 @@ The initial corpus is text-only. A multimodal model can still process text, but 
 
 ## Run the First Notebook
 
-Open [00-Foundations and Setup.ipynb](00-Foundations%20and%20Setup.ipynb). It currently covers configuration, storage creation/reuse, permission diagnosis/repair, private container creation, corpus upload/reuse, checksum validation, and setup handoff export. Model connections, telemetry, and evaluation-question sections will be added next.
+Open [experiments/00-Foundations-and-Setup.ipynb](experiments/00-Foundations-and-Setup.ipynb). It covers configuration, storage creation/reuse, permission diagnosis/repair, private container creation, corpus upload/reuse, checksum validation, setup handoff export, hosted model connections, a grounding demo, telemetry, and labeled evaluation questions.
 
 1. Configure the ignored [.env](.env) using [.env.example](.env.example) as the template. Keep this trusted local file shell-compatible; both the notebook and uploader use it. Never commit it or share resource-identifying notebook outputs.
 2. Use a local virtual environment and install [requirements.txt](requirements.txt). Select that environment as the notebook kernel.
@@ -61,30 +61,93 @@ python -m pip install -r requirements.txt
 
 The notebook updates `AZURE_CORPUS_PREFIX` after an enabled upload. Its local setup handoff and upload result are generated under the ignored artifact directory. A standalone uploader run creates a new snapshot but does not automatically change the selected prefix: review its result and update private configuration deliberately. Clear notebook outputs before committing. Account-key and anonymous-access workarounds are not needed for the portal permission error; use the scoped blob data role and verify effective access.
 
+## Repository Structure
+
+Exploration and the deployable result are kept in separate folders. Notebooks are where we experiment; the Python package is the final, importable outcome exposed as an API.
+
+```
+experiments/      # one notebook per stage: explore, measure, select, justify
+production/       # final selected implementation for each stage, importable
+  settings.py     #   shared config loaded from the same .env the notebooks use
+  clients.py      #   keyless Azure OpenAI client (Entra identity)
+  ingestion/      #   stage 01: loaders, preprocess, parser, pipeline
+  chunking/       #   stage 02
+  embeddings/     #   stage 03
+  indexing/       #   stage 04: vector_store, indexer
+  retrieval/      #   stages 05-07: retriever, hybrid_search, reranker, context_builder, query_processor
+  generation/     #   stage 08
+  evaluation/     #   stage 10: dataset, metrics
+  api/            #   stage 11: FastAPI app and routes
+  tools/          #   retrieve_evidence tool and MCP server
+  pipeline.py     #   composes the stages into offline + online flows
+.artifacts/       # ignored: handoffs, corpus cache, parsed blocks (local only)
+```
+
+Each `production/` module holds the choice justified in the matching `experiments/` notebook. The skeleton exists now and is filled in gradually as each stage is selected; modules raise `NotImplementedError` until their stage is complete. Both the notebooks and the package read the same [.env](.env) through `production/settings.py`, so they never drift. The corpus is not committed: it lives in blobs and caches to the ignored `.artifacts/`, so a tracked `data/` folder is not needed.
+
 ## One Notebook per Stage
 
-Use a notebook for each meaningful pipeline stage, not each individual technique. Alternatives live in sections within that notebook. Setup and production concerns are grouped rather than split into many small notebooks.
+**Split by experiment axis, not by technique.** A stage gets its own notebook when it has an independently tunable axis and produces a clean frozen handoff the next stage consumes. Techniques (for example, fixed vs. semantic chunking) stay as *sections within* that notebook. Pure setup or engineering with nothing to measure stays grouped (Stage 0 Foundations).
 
-Each stage ends with a **measured, justified selection**. The next notebook loads that selection and its outputs, keeping previous choices fixed while exploring the next stage. The aim is to explain why we chose an approach, not just demonstrate that it runs.
+This is why the sequence below splits previously clubbed topics: embeddings (model, dimensions) are tuned independently of indexing (index type, ANN params, schema); reranking is independent of context building; query handling is independent of adaptive routing. Keeping them apart lets each stage be frozen while the next is explored.
 
-**Status:** The first notebook implements storage and corpus setup; the RAG pipeline and remaining notebooks are planned. The existing empty [vectorDB.ipynb](vectorDB.ipynb) can be incorporated into the embeddings and indexing notebook. Future sections extend the foundations notebook instead of creating another setup notebook.
+Each stage ends with a **measured, justified selection**. The next notebook loads that selection and its artifacts, keeping previous choices fixed. Never silently mix old chunks, new embeddings, or incompatible indexes; each split stage must declare exactly which upstream artifact and version it consumes.
+
+### Stage Map
+
+The pipeline is **sequential**; foundations, observability, evaluation, and operations are **continuous** concerns that wrap every stage.
+
+```mermaid
+flowchart TB
+  subgraph FOUND["Stage 0 - Foundations (set up once)"]
+    F1["Storage + corpus"] ~~~ F2["Hosted models"] ~~~ F3["Telemetry"] ~~~ F4["Labeled questions"]
+  end
+  subgraph SPINE["Sequential pipeline (each stage hands off to the next)"]
+    direction TB
+    subgraph OFF["Offline - build the index"]
+      direction LR
+      I["01 Ingestion+Parsing"] --> C["02 Chunking"] --> E["03 Embeddings"] --> X["04 Indexing"]
+    end
+    subgraph ON["Online - answer a query"]
+      direction LR
+      Q["09 Query Handling"] --> R["05 Retrieval"] --> K["06 Reranking"] --> B["07 Context"] --> G["08 Generation"]
+    end
+    OFF --> ON
+  end
+  subgraph CROSS["Continuous (every stage)"]
+    direction LR
+    V1["Observability: traces + metrics"] ~~~ V2["10 Evaluation: scores + gates"] ~~~ V3["11-12 Operations + safety"]
+  end
+  FOUND --> SPINE
+  CROSS -. applies to every stage .-> SPINE
+```
+
+| Kind | Stages |
+| --- | --- |
+| **Sequential (the spine)** | 01 Ingestion & Parsing, 02 Chunking, 03 Embeddings, 04 Indexing, 05 Retrieval, 06 Reranking, 07 Context, 08 Generation, 09 Query Handling |
+| **Continuous (wraps all stages)** | 00 Foundations, Observability (traces + metrics), 10 Evaluation, 11 Production & Serving, 12 Operations & Safety, dashboard |
 
 ## Learning Sequence
 
-| Planned Notebook | Techniques to Explore | Metrics and Selection Evidence |
-| --- | --- | --- |
-| [00-Foundations and Setup.ipynb](00-Foundations%20and%20Setup.ipynb) | Storage and corpus bootstrap implemented. Add RAG versus ungrounded prompting, Azure model calls, structured logs/Phoenix traces, and labeled development/held-out questions next. | Currently verifies account security, blob access, manifest inventory, and a download checksum. Next define source-passage labels, question categories, quality targets, latency/cost budgets, and evaluation protocol. |
-| `01-Ingestion and Parsing.ipynb` | Compare deterministic parsing of acts/scenes/speakers with model-assisted text structuring. Preserve stage directions and source text; isolate Gutenberg administrative notices. Test multimodal parsing only after adding visual editions. | Measure structural accuracy on reviewed samples, dropped or invented lines, duplicates, latency, and cost. Select a parser or simple edition-type routing policy. |
-| `02-Chunking.ipynb` | Compare fixed-size, overlapping, scene/speech-aware, and model-assisted semantic chunks using the selected parsed plays. | Measure token distribution, duplicated context, dialogue continuity, evidence completeness, boundary failures, and model cost. Export selected chunks; revisit Recall@k once a fixed retrieval probe is available. |
-| `03-Embeddings and Indexing.ipynb` | Learn cosine similarity with small NumPy examples. Use hosted embeddings; test supported vector dimensions, batching, and caching. Inspect exact-search results, then build the Azure AI Search index. | Measure neighbor relevance, embedding usage/latency/cost, failures, index size, and indexed recall against exact search. Record the embedding deployment, dimensions, and matching index schema. |
-| `04-Retrieval.ipynb` | Compare keyword/BM25, dense, and hybrid retrieval with reciprocal rank fusion. Test top-k, version filters, and authorization. Expose `retrieve_evidence` with source text and image references. | Compare Recall@k, MRR, empty-result rate, filter correctness, and p95 latency on the same questions. Select a retrieval configuration and validate earlier chunking/index choices with a fixed probe. |
-| `05-Ranking and Context.ipynb` | Compare no reranking, Azure AI Search semantic ranking, and bounded LLM reranking using the existing chat deployment. Explore deduplication, parent context, and context budgets in separate experiments. | Measure nDCG@k, evidence coverage, context noise, token usage, latency, and cost. Keep candidates fixed for reranker comparisons; retain an added step only when it helps. |
-| `06-Grounded Generation.ipynb` | Use the same multimodal chat deployment to compare grounding prompts, exact quotations, citation formats, structured answers, and abstention rules. Distinguish interpretation from textual facts; add image-grounded answers when visual sources exist. | Measure quote fidelity, correctness, claim support, citation validity, abstention errors, latency, and cost. Human-review interpretations and calibrate model judges. Save the first complete baseline. |
-| `07-Query Handling and Adaptive RAG.ipynb` | Compare unchanged queries, rewriting, decomposition, multi-query search, and follow-up resolution. Test clarification and bounded retrieval retries separately; keep chat history distinct from evidence. | Measure query drift, retrieval gains, multi-hop/follow-up correctness, unnecessary abstention, tool calls, retries, latency, and cost. Prefer simple routing unless adaptive behavior demonstrates a benefit. |
-| `08-Production and Operations.ipynb` | Package selected implementations as tested modules and a FastAPI service. Compare batching, concurrency, caching, and update policies one at a time. Deploy the API and simple dashboard to Azure; test authorization, injection, deletion, throttling, and provider failure. | Measure load-test throughput, cold/warm p50/p95 latency, cost, freshness, recovery, and safety failures. Select operating settings and verify telemetry, cache isolation, release gates, and rollback. |
-| `09-Continuous Evaluation.ipynb` | Assemble the final selected pipeline, run component ablations, review failures, and add CI checks and sampled production evaluation. Grow the labeled set to at least 50 questions before final testing. | With settings frozen, compare baseline and final pipeline on held-out questions. Report category scores, sample sizes, uncertainty, latency, and cost; document promotion/rollback rules and remaining failures. |
+Each stage is one notebook under `experiments/` and one module group under `production/`. Done stages link to the notebook; planned stages show the path to be created.
 
-An optional `99-Helper Recipes.ipynb` explains shared functions and debugging recipes. Reusable implementations live in importable Python modules, not in a notebook that other notebooks must execute.
+| Stage / Notebook | Experiment Axis (techniques to compare) | Metrics and Selection | Production module |
+| --- | --- | --- | --- |
+| [00 Foundations](experiments/00-Foundations-and-Setup.ipynb) *(done)* | Not a tunable stage: storage/corpus setup, hosted model connections, grounding demo, telemetry, labeled questions. | Account security, blob access, manifest inventory, checksum; connectivity; trace + log; question schema. | `settings.py`, `clients.py` |
+| [01 Ingestion & Parsing](experiments/01-Ingestion-and-Parsing.ipynb) *(done)* | Deterministic rules vs. model-assisted structuring of acts/scenes/speakers; isolate Gutenberg notices. | Line coverage, speaker agreement, dropped/invented lines, latency, cost. Fallback routing by coverage. | `ingestion/` |
+| `02 Chunking` | Fixed-size, overlapping, scene/speech-aware, model-assisted semantic chunks. | Token distribution, duplicated context, dialogue continuity, boundary failures, cost. | `chunking/` |
+| `03 Embeddings` | Embedding model, vector dimensions, normalization, batching, caching. | Neighbor relevance, usage/latency/cost, failures. Record deployment + dimensions. | `embeddings/` |
+| `04 Indexing` | Index type, ANN parameters (M, efConstruction), metadata schema, hybrid config (Azure AI Search). | Index size, build duration, indexed recall vs. exact search. Record schema. | `indexing/` |
+| `05 Retrieval` | Keyword/BM25, dense, hybrid with reciprocal rank fusion; top-k, filters, authorization. | Recall@k, MRR, empty-result rate, filter correctness, p95 latency. | `retrieval/retriever.py`, `hybrid_search.py` |
+| `06 Reranking` | No reranking, semantic ranking, bounded LLM reranking (candidates fixed). | nDCG@k, evidence coverage, reranker latency, cost. Keep a step only if it helps. | `retrieval/reranker.py` |
+| `07 Context Building` | Deduplication, parent context, token budget, citation assembly. | Evidence coverage, context noise, token usage. | `retrieval/context_builder.py` |
+| `08 Grounded Generation` | Grounding prompts, exact quotations, citation formats, structured answers, abstention. | Quote fidelity, correctness, claim support, citation validity, abstention errors. Save baseline. | `generation/` |
+| `09 Query Handling & Adaptive RAG` | Unchanged vs. rewriting, decomposition, multi-query, follow-up resolution, bounded retries. | Query drift, retrieval gains, multi-hop correctness, unnecessary abstention, tool calls. | `retrieval/query_processor.py` |
+| `10 Continuous Evaluation` | Judges, ablations, CI checks, sampled production evaluation. Grow labeled set to 50+. | Recall@k, MRR, citation support on held-out; category scores, uncertainty, gates. | `evaluation/` |
+| `11 Production & Serving` | Package modules + FastAPI; batching, concurrency, caching, update policies. Deploy. | Throughput, cold/warm p50/p95 latency, cost, freshness, recovery. | `api/`, `tools/`, `pipeline.py` |
+| `12 Operations & Safety` | Monitoring, alerting, injection/deletion/throttling tests, rollback, dashboard. | Error/retry rates, safety-test results, rollback drill, dashboard metrics. | `api/`, operations config |
+
+An optional `99-Helper Recipes.ipynb` explains shared functions and debugging recipes. Reusable implementations live in the importable `production/` package, not in a notebook that other notebooks must execute.
 
 ## The Stage Experiment Pattern
 
