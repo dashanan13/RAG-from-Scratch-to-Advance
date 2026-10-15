@@ -79,6 +79,10 @@ Fill a production module FROM its notebook once the notebook stage is finished/j
   4. "The Technique Landscape" — table comparing 4-6 alternatives (strengths / weaknesses / status)
   5. Numbered working sections: "1. Load the Previous Selection", "2. Explain the Alternatives",
      "3. Run Controlled Experiments", "4. Measure", "5. Select", "6. Export Handoff"
+- Every stage includes a "## Metrics in This Stage — What Each Number Means" section placed
+  right BEFORE the measurement/experiment step. It is a 4-column table: Metric | What it measures
+  (which decision) | How it is computed (formula/code expr) | What it signifies (direction, caveats).
+  Avoid raw '|' inside cells (breaks the table); word it out or escape. Added to notebooks 00-06.
 - Heavy use of comparison tables and ASCII flow diagrams.
 - Italic for *general concepts*, bold for **key terms**.
 - ABBREVIATIONS: never use a short form without its full form. On first use write
