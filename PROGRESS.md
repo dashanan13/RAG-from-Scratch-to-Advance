@@ -30,10 +30,10 @@ COMPLETE (detailed, ~18-36 cells, code + markdown):
 - [x] 04 Indexing
 - [x] 05 Retrieval
 - [x] 06 Reranking  (only notebook with execution outputs so far)
+- [x] 07 Context Building
+- [x] 08 Grounded Generation
 
 STUB (7 cells, markdown headers only — need full build-out):
-- [ ] 07 Context Building
-- [ ] 08 Grounded Generation
 - [ ] 09 Query Handling & Adaptive RAG
 - [ ] 10 Continuous Evaluation
 - [ ] 11 Production & Serving
