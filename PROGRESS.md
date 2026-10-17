@@ -32,14 +32,16 @@ COMPLETE (detailed, ~18-36 cells, code + markdown):
 - [x] 06 Reranking  (only notebook with execution outputs so far)
 - [x] 07 Context Building
 - [x] 08 Grounded Generation
+- [x] 09 Query Handling & Adaptive RAG  (built, not executed; production/retrieval/query_processor.py filled with the decompose policy)
+- [x] 10 Continuous Evaluation  (built, not executed; evaluation/dataset.py + metrics.py filled; judge+gates)
+- [x] 11 Production & Serving  (built, not executed; pipeline.py composed, api + tools filled, fastapi/uvicorn added, docker-compose live; smoke-tested)
+- [x] 12 Operations & Safety  (built, not executed; pipeline.screen_query + safe_answer, /ask degrades; ops-config)
 
 STUB (7 cells, markdown headers only — need full build-out):
-- [ ] 09 Query Handling & Adaptive RAG
-- [ ] 10 Continuous Evaluation
-- [ ] 11 Production & Serving
-- [ ] 12 Operations & Safety
+- (none — all stages built)
 
-Production modules: currently mostly stubs that `raise NotImplementedError("Fill from experiments/XX.")`.
+Production modules: stages 00-12 mapped modules now filled from their notebooks (retrieval/indexing stubs
+for 04-07 remain stubs; pipeline.py composes those flows inline and is the production online/offline path).
 Fill a production module FROM its notebook once the notebook stage is finished/justified.
 
 ## Notebook <-> Production mapping
