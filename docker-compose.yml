@@ -10,6 +10,16 @@ services:
     build: .
     command: uvicorn production.api.main:create_app --factory --host 0.0.0.0 --port 8000
     env_file: .env
+    environment:
+      # DefaultAzureCredential reads the az CLI login mounted below.
+      AZURE_CONFIG_DIR: /root/.azure
+    volumes:
+      # Prebuilt index + caches from notebooks 01-04 (read at startup).
+      - ./.artifacts:/app/.artifacts
+      # Shared config, same file the notebooks use.
+      - ./.env:/app/.env:ro
+      # Keyless auth: reuse the host `az login` session inside the container.
+      - ${HOME}/.azure:/root/.azure:ro
     ports:
       - "8000:8000"
     depends_on:

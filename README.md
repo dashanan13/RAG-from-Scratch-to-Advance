@@ -61,6 +61,47 @@ python -m pip install -r requirements.txt
 
 The notebook updates `AZURE_CORPUS_PREFIX` after an enabled upload. Its local setup handoff and upload result are generated under the ignored artifact directory. A standalone uploader run creates a new snapshot but does not automatically change the selected prefix: review its result and update private configuration deliberately. Clear notebook outputs before committing. Account-key and anonymous-access workarounds are not needed for the portal permission error; use the scoped blob data role and verify effective access.
 
+## Run the Service (API + Chat Portal)
+
+The deployable result is a FastAPI service that exposes the online pipeline (`query -> retrieve -> rerank -> context -> generate`) and a browser chat portal for testing. It serves:
+
+- `GET /` — the chat web portal (ask questions, see grounded answers with work/act/scene citations).
+- `POST /ask` — grounded answer for one question.
+- `POST /retrieve_evidence` — the reusable grounding tool (passages + scores + request id, no generation).
+- `GET /healthz` — liveness probe; `GET /docs` — interactive API docs.
+
+**Prerequisites (both run modes):**
+
+1. A prebuilt index at `.artifacts/index.json` with a few sibling handoff files, produced by running notebooks 01-04 against the hosted Azure backend. The service validates this on startup and degrades (abstains) if it is missing.
+2. A keyless Azure identity. Sign in once on the host with `az login`; the service authenticates with `DefaultAzureCredential` — no API keys are stored.
+3. A configured [.env](.env) (copy from [.env.example](.env.example)), the same file the notebooks use.
+
+### Without Docker (local venv)
+
+Run directly in the project virtual environment. Good for development and quick checks.
+
+```bash
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+uvicorn production.api.main:create_app --factory --host 0.0.0.0 --port 8000
+```
+
+Open http://localhost:8000 for the chat portal. Stop with Ctrl+C.
+
+### With Docker (Compose)
+
+[docker-compose.yml](docker-compose.yml) builds the [Dockerfile](Dockerfile) and starts the API alongside Phoenix for tracing. The `api` service mounts your prebuilt `.artifacts/`, your `.env`, and your host `az login` session (`~/.azure`, read-only) so the container authenticates with the same keyless identity.
+
+```bash
+az login          # once on the host, so DefaultAzureCredential has a session
+docker compose up --build
+```
+
+- Chat portal: http://localhost:8000
+- Phoenix traces: http://localhost:6006
+
+Stop with Ctrl+C, or `docker compose down` to remove the containers.
+
 ## Repository Structure
 
 Exploration and the deployable result are kept in separate folders. Notebooks are where we experiment; the Python package is the final, importable outcome exposed as an API.

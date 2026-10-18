@@ -30,10 +30,10 @@ def healthz() -> dict:
 
 @router.post("/ask")
 def ask(request: AskRequest) -> dict:
-    from ..pipeline import safe_answer
+    from ..pipeline import safe_answer_traced
 
-    # safe_answer screens the input and degrades gracefully on provider failure instead of raising.
-    return safe_answer(request.query)
+    # safe_answer_traced screens the input, degrades gracefully, and returns a per-stage trace for the UI.
+    return safe_answer_traced(request.query)
 
 
 @router.post("/retrieve_evidence")

@@ -403,6 +403,104 @@ def answer(query: str, use_cache: bool = True) -> dict:
     }
 
 
+def _scene_label(record: dict) -> str:
+    scenes = record.get("scenes") or []
+    return f"Act {scenes[0][0]}, Scene {scenes[0][1]}" if scenes else "Unknown scene"
+
+
+def answer_traced(query: str, use_cache: bool = True) -> dict:
+    """Same online flow as ``answer`` but records what each stage produced, for the UI trace panel."""
+    query = (query or "").strip()
+    if not query:
+        raise ValueError("query must be a non-empty string")
+    engine = get_engine()
+    params = engine.params
+    request_id = uuid.uuid4().hex
+    started = time.perf_counter()
+
+    # Stage 09 - query handling: policy may rewrite or decompose the question.
+    primary, variants = _shape_query(engine, query)
+    primary_vector = _embed(engine, primary)
+
+    # Stage 05 - retrieval: one ranking per variant, fused when there is more than one.
+    pool_size = params["candidate_pool"]
+    rankings = [_retrieve_pool(engine, v, _embed(engine, v), pool_size) for v in variants]
+    fused = rankings[0] if len(rankings) == 1 else _rrf(rankings, params["rrf_k"], pool_size)
+
+    def _brief(row: int, rank: int) -> dict:
+        record = engine.records[row]
+        return {"rank": rank, "work": record["work"], "scene": _scene_label(record),
+                "speakers": record.get("speakers", [])[:4],
+                "score": round(_dot(primary_vector, engine.vectors[row]), 3)}
+
+    retrieved_rows = [_brief(row, i + 1) for i, row in enumerate(fused[:8])]
+
+    # Stage 06 - reranking: reorder the fused pool only if a reranker is selected.
+    reordered = False
+    if params["reranker"] == "semantic":
+        before = list(fused)
+        fused = sorted(fused, key=lambda row: _dot(primary_vector, engine.vectors[row]), reverse=True)
+        reordered = fused != before
+
+    # Stage 07 - context building: dedup, parent context, token budget, citation assembly.
+    built = _build_context(engine, fused)
+    context_tokens = len(_get_encoder().encode(built["context"])) if built["context"] else 0
+
+    # Stage 08 - generation: grounded answer under the selected contract.
+    text, gen_latency = _generate(engine, query, built["context"], use_cache=use_cache)
+    abstained = params["sentinel"] in text.upper()
+    cited = {int(m) for m in _CITATION_PATTERN.findall(text)}
+    used_citations = [c for c in built["citations"] if c["marker"] in cited]
+
+    kept = len(built["citations"])
+    if retrieved_rows:
+        work_counts: dict[str, int] = {}
+        for brief in retrieved_rows:
+            work_counts[brief["work"]] = work_counts.get(brief["work"], 0) + 1
+        top_work, top_n = max(work_counts.items(), key=lambda kv: kv[1])
+        retrieval_note = f"{top_n} of {len(retrieved_rows)} top candidates from {top_work} (score ~{retrieved_rows[0]['score']})."
+    else:
+        retrieval_note = "No candidates retrieved for this query."
+    if abstained and kept == 0:
+        generation_note = "Abstained because no passages reached the context — nothing to ground an answer in."
+    elif abstained:
+        generation_note = (f"Abstained under the {params['contract']} contract even though {kept} passage(s) were in context: "
+                           "the question is likely interpretive or not directly stated in the text, so the model refused to invent a claim.")
+    else:
+        generation_note = f"Answered from {len(used_citations)} cited passage(s)." if used_citations else "Answered from the retrieved context."
+
+    stages = [
+        {"stage": "09 Query Handling", "status": "ok",
+         "fields": {"policy": params["policy"], "primary": primary,
+                    "sub_queries": variants if len(variants) > 1 else []}},
+        {"stage": "05 Retrieval", "status": "ok" if retrieved_rows else "warn",
+         "note": retrieval_note,
+         "fields": {"method": params["method"], "candidate_pool": pool_size, "returned": len(fused)},
+         "rows": retrieved_rows},
+        {"stage": "06 Reranking", "status": "ok",
+         "fields": {"reranker": params["reranker"], "reordered": reordered}},
+        {"stage": "07 Context Building", "status": "ok" if built["citations"] else "warn",
+         "fields": {"builder": params["builder"], "token_budget": params["token_budget"],
+                    "passages_kept": len(built["citations"]), "context_tokens": context_tokens},
+         "rows": [{"marker": c["marker"], "work": c["work"], "scene": c["scene"],
+                   "speakers": c.get("speakers", [])[:4]} for c in built["citations"]]},
+        {"stage": "08 Generation", "status": "abstained" if abstained else "ok",
+         "note": generation_note,
+         "fields": {"contract": params["contract"], "latency_ms": round(gen_latency, 1),
+                    "abstained": abstained, "cited_markers": sorted(cited) if cited else []}},
+    ]
+
+    return {
+        "request_id": request_id,
+        "query": query,
+        "answer": text,
+        "citations": used_citations,
+        "abstained": abstained,
+        "latency_ms": (time.perf_counter() - started) * 1000,
+        "stages": stages,
+    }
+
+
 def retrieve_evidence(query: str, top_k: int = 5) -> dict:
     """Reusable retrieval tool: return the cited passages for a query without generating an answer."""
     query = (query or "").strip()
@@ -457,7 +555,11 @@ def safe_answer(query: str) -> dict:
     single failed upstream call cannot take the service down. Injection flags are attached for monitoring.
     """
     screen = screen_query(query)
-    engine = get_engine()
+    try:
+        engine = get_engine()
+    except Exception as exc:  # index artifact missing or Azure identity unavailable: degrade, do not crash
+        return {"request_id": uuid.uuid4().hex, "query": query, "answer": "INSUFFICIENT_CONTEXT", "citations": [],
+                "abstained": True, "degraded": True, "error": type(exc).__name__, "flags": screen.get("flags", [])}
     sentinel = engine.params["sentinel"]
     if not screen["ok"]:
         return {"request_id": uuid.uuid4().hex, "query": query, "answer": sentinel, "citations": [],
@@ -470,4 +572,29 @@ def safe_answer(query: str) -> dict:
     except Exception as exc:  # provider outage, throttling past retries, etc.: degrade, do not crash
         return {"request_id": uuid.uuid4().hex, "query": query, "answer": sentinel, "citations": [],
                 "abstained": True, "degraded": True, "error": type(exc).__name__, "flags": screen["flags"]}
+
+
+def safe_answer_traced(query: str) -> dict:
+    """Operations wrapper around ``answer_traced``: screens input and degrades gracefully, keeping the trace."""
+    screen = screen_query(query)
+    try:
+        engine = get_engine()
+    except Exception as exc:  # index artifact missing or Azure identity unavailable: degrade, do not crash
+        return {"request_id": uuid.uuid4().hex, "query": query, "answer": "INSUFFICIENT_CONTEXT", "citations": [],
+                "abstained": True, "degraded": True, "error": type(exc).__name__,
+                "flags": screen.get("flags", []), "stages": []}
+    sentinel = engine.params["sentinel"]
+    if not screen["ok"]:
+        return {"request_id": uuid.uuid4().hex, "query": query, "answer": sentinel, "citations": [],
+                "abstained": True, "degraded": True, "error": screen["reason"],
+                "flags": screen["flags"], "stages": []}
+    try:
+        result = answer_traced(query)
+        result["degraded"] = False
+        result["flags"] = screen["flags"]
+        return result
+    except Exception as exc:  # provider outage, throttling past retries, etc.: degrade, do not crash
+        return {"request_id": uuid.uuid4().hex, "query": query, "answer": sentinel, "citations": [],
+                "abstained": True, "degraded": True, "error": type(exc).__name__,
+                "flags": screen["flags"], "stages": []}
 
