@@ -1,18 +1,30 @@
 # RAG-from-Scratch-to-Advance
 
-A zero-to-production guide: build a RAG system, see what happens at every stage, and improve it using measured evidence.
+A zero-to-production guide: build a Retrieval-Augmented Generation (RAG) system, see what happens at every stage, and improve it using measured evidence.
 
-## The Project: Shakespeare Evidence Desk
+## What This Teaches
 
-Build a **literature research assistant and reusable LLM grounding service** over ten complete Shakespeare plays. Retrieve passages across works, answer questions about characters and events, and support literary interpretations with quoted evidence rather than invented quotations.
+This is a hands-on course in building a RAG system from first principles to a deployed, monitored service. The real subject is the **method**: at every stage you compare the alternatives, run a controlled experiment, measure the result against labeled questions, pick the simplest option that clears the bar, and freeze that choice before moving on. You finish with both a working service and the judgement to make these decisions on your own corpus.
+
+To keep every decision concrete and measurable, the whole guide is built around **one running example** — a Shakespeare "evidence desk." The retrieval techniques, trade-offs, and metrics are the point; the plays are simply the corpus that makes them tangible. Swap in your own documents and the same method applies.
+
+By the end you can:
+
+- Build the offline path (ingest, chunk, embed, index) and the online path (query, retrieve, rerank, build context, generate) by hand, in plain Python.
+- Justify each choice with metrics, not vibes, and tell when a step helps enough to keep.
+- Serve the result as a tested API with a browser chat portal, evaluation gates, and operational safety.
+
+## The Running Example: Shakespeare Evidence Desk
+
+We use a single case study throughout so each choice has a concrete cost and a measurable effect: a **literature research assistant and reusable grounding service** over ten complete Shakespeare plays. It retrieves passages across works, answers questions about characters and events, and supports literary interpretations with quoted evidence rather than invented quotations.
 
 Ask: **"How do encounters with ghosts influence Hamlet and Macbeth? Compare their reactions with passages from both plays."**
 
 The assistant distinguishes explicit textual facts from interpretations and admits when the corpus does not support an answer. Citations identify the work and source edition, with act/scene, speaker, and passage locations where reliably extracted. Do not invent canonical line numbers or imply that one interpretation is the only correct reading.
 
-The same retrieval pipeline exposes a `retrieve_evidence` tool for other LLM applications. Its response contains passages, source locations, document versions, retrieval scores, and a request ID. Scores indicate relevance, not guaranteed truth. A small dashboard shows current metrics for the selected pipeline stage.
+The same retrieval pipeline exposes a `retrieve_evidence` tool for other LLM applications. Its response contains passages, source locations, document versions, retrieval scores, and a request ID. Scores indicate relevance, not guaranteed truth.
 
-**Final deliverables:** a grounded assistant, a reusable grounding API/tool, a stage-by-stage dashboard, and a tested, deployable service with evaluation gates and operational monitoring.
+**What gets built:** a grounded chat assistant served through a browser portal, a per-answer pipeline trace that shows what each stage produced (so abstentions and failures are visible, not mysterious), a reusable grounding API/tool, and a tested, containerized service with evaluation gates and operational monitoring. A separate Streamlit stage-metrics dashboard remains an optional extension.
 
 ## Starting Corpus
 
@@ -65,7 +77,7 @@ The notebook updates `AZURE_CORPUS_PREFIX` after an enabled upload. Its local se
 
 The deployable result is a FastAPI service that exposes the online pipeline (`query -> retrieve -> rerank -> context -> generate`) and a browser chat portal for testing. It serves:
 
-- `GET /` — the chat web portal (ask questions, see grounded answers with work/act/scene citations).
+- `GET /` — the chat web portal: ask questions, see grounded answers with work/act/scene citations, and inspect a per-answer pipeline trace (what each stage produced, with similarity scores and abstention reasons).
 - `POST /ask` — grounded answer for one question.
 - `POST /retrieve_evidence` — the reusable grounding tool (passages + scores + request id, no generation).
 - `GET /healthz` — liveness probe; `GET /docs` — interactive API docs.
@@ -118,13 +130,13 @@ production/       # final selected implementation for each stage, importable
   retrieval/      #   stages 05-07: retriever, hybrid_search, reranker, context_builder, query_processor
   generation/     #   stage 08
   evaluation/     #   stage 10: dataset, metrics
-  api/            #   stage 11: FastAPI app and routes
+  api/            #   stage 11: FastAPI app, routes, and static/ chat portal + trace
   tools/          #   retrieve_evidence tool and MCP server
-  pipeline.py     #   composes the stages into offline + online flows
+  pipeline.py     #   composes the stages into offline + online flows (the real serving path)
 .artifacts/       # ignored: handoffs, corpus cache, parsed blocks (local only)
 ```
 
-Each `production/` module holds the choice justified in the matching `experiments/` notebook. The skeleton exists now and is filled in gradually as each stage is selected; modules raise `NotImplementedError` until their stage is complete. Both the notebooks and the package read the same [.env](.env) through `production/settings.py`, so they never drift. The corpus is not committed: it lives in blobs and caches to the ignored `.artifacts/`, so a tracked `data/` folder is not needed.
+Each `production/` module holds the choice justified in the matching `experiments/` notebook. The online service runs through `production/pipeline.py`, which composes the selected per-stage flows and reads the frozen handoffs, so the running system reflects the measured selections rather than notebook state; some per-stage modules remain thin wrappers that defer to that composed pipeline. Both the notebooks and the package read the same [.env](.env) through `production/settings.py`, so they never drift. The corpus is not committed: it lives in blobs and caches to the ignored `.artifacts/`, so a tracked `data/` folder is not needed.
 
 ## One Notebook per Stage
 
@@ -170,23 +182,23 @@ flowchart TB
 
 ## Learning Sequence
 
-Each stage is one notebook under `experiments/` and one module group under `production/`. Done stages link to the notebook; planned stages show the path to be created.
+Each stage is one notebook under `experiments/` and one module group under `production/`. Every stage below is built — the link opens its notebook.
 
 | Stage / Notebook | Experiment Axis (techniques to compare) | Metrics and Selection | Production module |
 | --- | --- | --- | --- |
 | [00 Foundations](experiments/00-Foundations-and-Setup.ipynb) *(done)* | Not a tunable stage: storage/corpus setup, hosted model connections, grounding demo, telemetry, labeled questions. | Account security, blob access, manifest inventory, checksum; connectivity; trace + log; question schema. | `settings.py`, `clients.py` |
 | [01 Ingestion & Parsing](experiments/01-Ingestion-and-Parsing.ipynb) *(done)* | Deterministic rules vs. model-assisted structuring of acts/scenes/speakers; isolate Gutenberg notices. | Line coverage, speaker agreement, dropped/invented lines, latency, cost. Fallback routing by coverage. | `ingestion/` |
-| `02 Chunking` | Fixed-size, overlapping, scene/speech-aware, model-assisted semantic chunks. | Token distribution, duplicated context, dialogue continuity, boundary failures, cost. | `chunking/` |
-| `03 Embeddings` | Embedding model, vector dimensions, normalization, batching, caching. | Neighbor relevance, usage/latency/cost, failures. Record deployment + dimensions. | `embeddings/` |
-| `04 Indexing` | Index type, ANN parameters (M, efConstruction), metadata schema, hybrid config (Azure AI Search). | Index size, build duration, indexed recall vs. exact search. Record schema. | `indexing/` |
-| `05 Retrieval` | Keyword/BM25, dense, hybrid with reciprocal rank fusion; top-k, filters, authorization. | Recall@k, MRR, empty-result rate, filter correctness, p95 latency. | `retrieval/retriever.py`, `hybrid_search.py` |
-| `06 Reranking` | No reranking, semantic ranking, bounded LLM reranking (candidates fixed). | nDCG@k, evidence coverage, reranker latency, cost. Keep a step only if it helps. | `retrieval/reranker.py` |
-| `07 Context Building` | Deduplication, parent context, token budget, citation assembly. | Evidence coverage, context noise, token usage. | `retrieval/context_builder.py` |
-| `08 Grounded Generation` | Grounding prompts, exact quotations, citation formats, structured answers, abstention. | Quote fidelity, correctness, claim support, citation validity, abstention errors. Save baseline. | `generation/` |
-| `09 Query Handling & Adaptive RAG` | Unchanged vs. rewriting, decomposition, multi-query, follow-up resolution, bounded retries. | Query drift, retrieval gains, multi-hop correctness, unnecessary abstention, tool calls. | `retrieval/query_processor.py` |
-| `10 Continuous Evaluation` | Judges, ablations, CI checks, sampled production evaluation. Grow labeled set to 50+. | Recall@k, MRR, citation support on held-out; category scores, uncertainty, gates. | `evaluation/` |
-| `11 Production & Serving` | Package modules + FastAPI; batching, concurrency, caching, update policies. Deploy. | Throughput, cold/warm p50/p95 latency, cost, freshness, recovery. | `api/`, `tools/`, `pipeline.py` |
-| `12 Operations & Safety` | Monitoring, alerting, injection/deletion/throttling tests, rollback, dashboard. | Error/retry rates, safety-test results, rollback drill, dashboard metrics. | `api/`, operations config |
+| [02 Chunking](experiments/02-Chunking.ipynb) *(done)* | Fixed-size, overlapping, scene/speech-aware, model-assisted semantic chunks. | Token distribution, duplicated context, dialogue continuity, boundary failures, cost. | `chunking/` |
+| [03 Embeddings](experiments/03-Embeddings.ipynb) *(done)* | Embedding model, vector dimensions, normalization, batching, caching. | Neighbor relevance, usage/latency/cost, failures. Record deployment + dimensions. | `embeddings/` |
+| [04 Indexing](experiments/04-Indexing.ipynb) *(done)* | Index type, ANN parameters (M, efConstruction), metadata schema, hybrid config (Azure AI Search). | Index size, build duration, indexed recall vs. exact search. Record schema. | `indexing/` |
+| [05 Retrieval](experiments/05-Retrieval.ipynb) *(done)* | Keyword/BM25, dense, hybrid with reciprocal rank fusion; top-k, filters, authorization. | Recall@k, MRR, empty-result rate, filter correctness, p95 latency. | `retrieval/retriever.py`, `hybrid_search.py` |
+| [06 Reranking](experiments/06-Reranking.ipynb) *(done)* | No reranking, semantic ranking, bounded LLM reranking (candidates fixed). | nDCG@k, evidence coverage, reranker latency, cost. Keep a step only if it helps. | `retrieval/reranker.py` |
+| [07 Context Building](experiments/07-Context-Building.ipynb) *(done)* | Deduplication, parent context, token budget, citation assembly. | Evidence coverage, context noise, token usage. | `retrieval/context_builder.py` |
+| [08 Grounded Generation](experiments/08-Grounded-Generation.ipynb) *(done)* | Grounding prompts, exact quotations, citation formats, structured answers, abstention. | Quote fidelity, correctness, claim support, citation validity, abstention errors. Save baseline. | `generation/` |
+| [09 Query Handling & Adaptive RAG](experiments/09-Query-Handling-and-Adaptive-RAG.ipynb) *(done)* | Unchanged vs. rewriting, decomposition, multi-query, follow-up resolution, bounded retries. | Query drift, retrieval gains, multi-hop correctness, unnecessary abstention, tool calls. | `retrieval/query_processor.py` |
+| [10 Continuous Evaluation](experiments/10-Continuous-Evaluation.ipynb) *(done)* | Judges, ablations, CI checks, sampled production evaluation. Grow labeled set to 50+. | Recall@k, MRR, citation support on held-out; category scores, uncertainty, gates. | `evaluation/` |
+| [11 Production & Serving](experiments/11-Production-and-Serving.ipynb) *(done)* | Package modules + FastAPI; batching, concurrency, caching, update policies. Deploy. | Throughput, cold/warm p50/p95 latency, cost, freshness, recovery. | `api/`, `tools/`, `pipeline.py` |
+| [12 Operations & Safety](experiments/12-Operations-and-Safety.ipynb) *(done)* | Monitoring, alerting, injection/deletion/throttling tests, rollback, dashboard. | Error/retry rates, safety-test results, rollback drill, dashboard metrics. | `api/`, operations config |
 
 An optional `99-Helper Recipes.ipynb` explains shared functions and debugging recipes. Reusable implementations live in the importable `production/` package, not in a notebook that other notebooks must execute.
 
@@ -221,11 +233,11 @@ Start with two deployments in one Azure OpenAI resource within Foundry: one mult
 
 For visual documents, embed extracted text and image descriptions while retaining original image references. Give relevant images to the answer model when useful. This is text-based retrieval of visual evidence, not native image-vector search. Treat model extraction as fallible, preserve provenance, and cache outputs keyed by source and model/prompt/settings versions.
 
-## Simple Stage Dashboard
+## Seeing the Metrics: Portal Trace and Stage Dashboard
 
-Host a small **Streamlit** dashboard in Azure, adding one tab as each stage becomes executable. Selecting a tab shows only that stage's current relevant metrics through a few counters, tables, or simple charts. Read actual telemetry and the latest completed evaluation results.
+Two surfaces make pipeline behavior visible. The **chat portal** (built — see Run the Service) shows a per-answer **pipeline trace**: for each question the right panel lists what every stage produced — the shaped query, the retrieved passages with similarity scores, the reranking, the passages kept for context, and the generation outcome — with a plain-language note on each stage and an abstention badge when the model declines. That makes a refusal or a weak retrieval legible at a glance, right next to the answer.
 
-No before/after panels, baseline/candidate overlays, experiment selectors, or embedded chat interface. Learners can view the metrics, make a change, rerun the stage, and refresh to see the new values. Detailed traces and experiments remain in Phoenix; experiment notes remain in the notebooks.
+A separate **Streamlit stage dashboard** (optional extension) aggregates current metrics across runs rather than per-answer detail. Host it in Azure, adding one tab as each stage becomes executable; selecting a tab shows that stage's current relevant metrics through a few counters, tables, or simple charts, reading actual telemetry and the latest completed evaluation results. It has no before/after panels, baseline overlays, experiment selectors, or embedded chat — detailed traces stay in the portal and Phoenix, and experiment notes stay in the notebooks.
 
 | Tab | Current Metrics |
 | --- | --- |
@@ -246,7 +258,7 @@ Label the measurement window, sample count, and last refresh or evaluation time.
 - **Models:** two initial Azure-hosted OpenAI deployments through Foundry (Microsoft Foundry): multimodal chat and embeddings. Configure deployment names and model versions; check regional availability, quota, and pricing. Optional model comparisons can use additional deployments in the same resource where available.
 - **Retrieval:** NumPy for small exact-search exercises; Azure AI Search for the shared keyword/vector/hybrid index and optional semantic ranking. No separate local embedding or reranking model is required.
 - **Tracing and evaluation:** Arize Phoenix hosted in Azure, with OpenTelemetry/OpenInference instrumentation, datasets, experiments, and human-calibrated evaluators.
-- **Application:** Plain Python pipeline functions, FastAPI for serving, and Streamlit for the dashboard. Keep orchestration transparent before adding frameworks.
+- **Application:** Plain Python pipeline functions, FastAPI for serving and the browser chat portal with pipeline trace, and an optional Streamlit stage dashboard. Keep orchestration transparent before adding frameworks.
 - **Operations:** Azure Container Apps as the initial application deployment target; Azure Monitor/Application Insights for service health, logs, and alerts. Prometheus is an optional metrics backend hosted in Azure, not a requirement to introduce another dashboard or run duplicate monitoring stacks. Correlate application logs and Phoenix traces with the same request/trace IDs.
 
 Pin dependencies as we implement. Credentials stay outside notebooks and outputs; use managed identity where supported. Restrict access to the dashboard and Phoenix, redact telemetry before export, and define retention and sampling policies. Add tools only when they solve a demonstrated need.
@@ -263,7 +275,7 @@ The final showcase demonstrates:
 
 - **An evidence-backed literary comparison:** accurate quotations from multiple plays, traceable citations, and clearly labeled interpretations.
 - **A reusable grounding tool:** another LLM consumes authorized, versioned evidence from the same pipeline.
-- **A measurable improvement:** notebook-recorded measurements and a trace explain a failure and its fix; the dashboard shows the current stage metrics.
+- **A measurable improvement:** notebook-recorded measurements and the portal's pipeline trace explain a failure and its fix; the optional dashboard aggregates the current stage metrics.
 - **A safe refusal:** missing evidence or denied access does not produce fabricated guidance or disclose documents.
 - **A live update and failure drill:** replace or delete a document, simulate a dependency failure, inspect alerts, and demonstrate recovery or rollback.
 - **A release gate:** automated tests and quality, latency, and cost budgets determine whether a candidate is deployed.
